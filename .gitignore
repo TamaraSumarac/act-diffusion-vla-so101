@@ -9,3 +9,4 @@ __pycache__/
 so101_policy_robustness/
 .ipynb_checkpoints/
 checkpoints_act_baseline/
+*.MOV

@@ -1,4 +1,4 @@
-"""ACT training with per-episode head/tail trims applied at the sampler level.
+"""Policy training (ACT / Diffusion / SmolVLA) with per-episode head/tail trims applied at the sampler level.
 
 Stock lerobot_train, one interception: EpisodeAwareSampler receives per-episode
 from/to frame-index arrays; we shift them inward using trim_frames.json

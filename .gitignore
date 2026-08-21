@@ -11,3 +11,4 @@ so101_policy_robustness/
 checkpoints_act_baseline/
 *.MOV
 checkpoints_diffusion_baseline/
+checkpoints_smolvla_baseline/

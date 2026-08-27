@@ -10,6 +10,7 @@
 # Ritual: leader boxed; camera verified by what it SEES; block placed; hand
 # near power. Task string stays verbatim (SmolVLA consumes it as model input).
 set -e
+cd "$(dirname "$0")/.."
 
 EXTRA_ARGS=()
 case "$1" in

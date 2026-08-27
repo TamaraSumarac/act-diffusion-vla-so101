@@ -24,7 +24,7 @@
 | 12    | Top left, yellow side mirror, 45 degrees     | 0             | tipped it on first attempt and the following one                                               |
 | 13    | Top right, yellow side mirror, 45 degrees    | 0             | picked up block on last attempt but didn't drop it                                             |
 | 14    | Bottom left, yellow side mirror, 45 degrees  | 0             | position slightly off; pushed block toward 90 degrees on first attempt, hard to recover        |
-| 15    | Bottom right, yellow side mirror, 45 degrees | 0             | same as trial 14                                                                               |
+| 15    | Bottom right, yellow side mirror, 45 degrees | 0             | same as previous one                                                                           |
 | 16    | Center, yellow side door, 135 degrees        | 1             |                                                                                                |
 | 17    | Top left, yellow side door, 135 degrees      | 0             | RE-RUN: initially staged at 45 degrees by mistake (failed; consistent with trial 12); re-run at correct 135 below - position slighrtly off, pushed block to 90 degrees at first attempt and out of 90 degrees on 2nd |
 | 18    | Top right, yellow side door, 135 degrees     | 0             | pushed the block into 90 degrees on first attempt                                              |

@@ -2,9 +2,9 @@
 # 20-trial nominal eval on the frozen 5x4 grid (episodic strategy, recorded).
 #
 # Usage:
-#   bash rollout/eval_nominal.sh diffusion
-#   bash rollout/eval_nominal.sh smolvla
-#   (act evaluated in Week 7: rollout_act_nominal_eval_20260818_104621)
+#   bash eval_nominal.sh diffusion
+#   bash eval_nominal.sh smolvla
+#   (act evaluated: rollout_act_nominal_eval_20260818_104621)
 #
 # Protocol (frozen): same 20 start cells in the same order as eval_nominal_act.md;
 # 30 s budget; 20 s reset; success = block at rest fully within plate rim;

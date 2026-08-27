@@ -42,3 +42,16 @@ proceeds with visible think-pauses; this does not affect the success criterion, 
 chunk-generation cost is recorded as an architecture-level deployment property of the
 comparison (ACT: tens of ms per 100-action chunk; Diffusion DDIM-10: ~861 ms per
 32-action chunk). All nominal-eval rollouts use the `100000_ddim10` variant.
+
+**Community context.** This failure mode is documented in the field, not specific to
+this setup: jerky diffusion motion on SO-101 is reported even on RTX-4080-class
+hardware (with denoising-steps and action-horizon tuning failing to help, as here),
+and practitioner guidance puts DDIM-10 at ~20 Hz on an RTX 3090 — roughly 5–10×
+faster than the 861 ms measured on mps. At GPU-class re-planning rates the
+inter-chunk seam problem largely dissolves (fast re-planning is the architecture's
+intended smoothing mechanism), and published deployments of this exact LeRobot
+implementation on SO-100 at 30 Hz control run on A6000-class servers. The exclusion
+is therefore scoped precisely: Diffusion Policy is undeployable on laptop-class
+(mps) inference under sync rollout — not undeployable in general. GPU-backed
+inference (local or via policy server) is the first-ranked option for a follow-up
+(ideas.md).

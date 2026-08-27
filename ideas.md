@@ -1,6 +1,7 @@
 # Ideas
 
-- - **Targeted-demo probe: data coverage vs architecture** (2026-08-19, after ACT failure taxonomy):
+- **Diffusion re-eval via GPU inference** (2026-08-24, after exclusion): community evidence says DDIM-10 runs ~20 Hz on RTX-3090-class GPUs (vs 861 ms/chunk on mps) — fast re-planning dissolves the seam problem. Cheapest path to a Diffusion row on the frozen 20-cell grid: remote policy server or cloud GPU driving the arm; zero model changes. Ranked above ensembling/RTC in the Phase 2.5 options.
+- **Targeted-demo probe: data coverage vs architecture** (2026-08-19, after ACT failure taxonomy):
   ACT fails pre-grasp at off-center/90° cells by reaching toward the training mode ("short leash" —
   retries track the block, but only near the workspace middle). Probe: record ~20 extra demos
   concentrated at failing cells (corners, 90°), retrain same ACT, rerun frozen grid.

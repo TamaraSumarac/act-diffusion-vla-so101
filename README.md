@@ -7,7 +7,7 @@ To explore that question, I trained two policies on an SO-101 arm: ACT, trained 
 
 ![Robustness heatmap](perturbation/robustness_heatmap.png)
 
-**TLDR:** two policies seem to learn different features from the same data. ACT appears to rely more on object shape than color, while SmolVLA is more sensitive to color—though this may be influenced by the language instruction. In terms of trajectory, ACT seems to operate more on “autopilot,” often reproducing an “average” of the training trajectories, whereas SmolVLA appears more reactive to its visual observations. Both policies show that positional control could be significantly improved with better coverage in the training data. At first glance, SmolVLA seems to have a better visual representation of the environment, while ACT may explore the action space more effectively.
+**TLDR:** two policies seem to learn different features from the same data. ACT appears to rely more on object shape than color, while SmolVLA is more sensitive to color—though this may be influenced by the language instruction. In terms of trajectory, ACT seems to operate more on “autopilot,” often reproducing an “average” of the training trajectories, whereas SmolVLA appears more reactive to its visual observations. Both policies show that positional control could be significantly improved with better coverage in the training data. At first glance, SmolVLA seems to have a better visual representation of the environment, while ACT engages the object more persistently - more attempts and more retries, though not always deliberate ones.
 
 
 ![Novel object, side by side](perturbation/novel_object_side_by_side.gif)
@@ -16,15 +16,15 @@ To explore that question, I trained two policies on an SO-101 arm: ACT, trained 
 
 ## Key takeaways
 
-- **Nominal performance is informative.** Under nominal conditions, the two policies have similar success rates (45% vs. 35%). But how they fail already reveals differences between them, which become much clearer under conditions neither policy saw during training.
-- **Training data is the most important success factor.** As expected, and consistent with where much of the field is focused, having high quality training data that covers the range of possible conditions strongly affects success. Shifting the target object just a few centimeters outside the start region used in trainings drops both policies to ~0% success (1/16 and 0/16). ACT gets more accidental collisions with the target object, while SmolVLA partially localizes it but cannot construct a successful grasp out of distribution.
+- **Nominal success rate hide the differences.** Under nominal conditions, the two policies have similar success rates (45% vs. 35%). But how they fail already reveals differences between them, which become much clearer under conditions neither policy saw during training.
+- **Training data is the most important success factor.** As expected, and consistent with where much of the field is focused, having high quality training data that covers the range of possible conditions strongly affects success. Shifting the target object just a few centimeters outside the start region used in training drops both policies to ~0% success (1/16 and 0/16). ACT gets more accidental collisions with the target object, while SmolVLA partially localizes it but cannot construct a successful grasp out of distribution.
 - **Color vs. shape.** Policies appear to rely on different visual features. Different color block drops SmolVLA from 35%→10% while leaving ACT unchanged. Changing the object shape instead (pink block → pink sock) has the opposite effect: ACT fails to register the sock as a target in 16/19 trials, while SmolVLA still localizes it and reaches it.
 - **Representation beats reaction time.** In the mid-reach slide condition, ACT inference is ~3× faster (~351 ms vs. ~1 s), giving it more opportunities to replan. Despite this, ACT does not adjust its trajectory to re-target the moved object, while SmolVLA does.
 - **Throughput vs quality:** ACT and SmolVLA differ in the quantity vs quality of their grasp attempts. Based on joint traces, ACT makes ~1.8× more attempts per episode, while SmolVLA converts individual attempts more successfully (0.28 vs. 0.20 success per attempt). This suggests ACT's higher overall success rate may be driven partly by having more attempts, while SmolVLA may be latency-limited rather than less capable per attempt - something that could be tested with asynchronous inference.
 
 ## Method
 
-- **Hardware:** SO-101 leader/follower arm pair, single overhead camera (poisitioned across the follower), LeRobot v0.6.1.
+- **Hardware:** SO-101 leader/follower arm pair, single front-facing camera (positioned across from the follower), LeRobot v0.6.1.
 - **Dataset:** 50 teleoperated pick-and-place demos, frozen before any training ([`so101_policy_robustness`](https://huggingface.co/datasets/TamaraSumarac/so101_policy_robustness)).
 - **Policies:** LeRobot default configurations for ACT and SmolVLA fine-tune, trained on the identical dataset. (Diffusion Policy was excluded at the deployment gate after sync-inference chunk
   disagreement physically damaged a servo; its eval is scoped to follow up work.)

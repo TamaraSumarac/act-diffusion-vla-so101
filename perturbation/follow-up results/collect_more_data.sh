@@ -1,0 +1,19 @@
+lerobot-record \
+  --robot.type=so101_follower \
+  --robot.port=/dev/tty.usbmodem5B610326031 \
+  --robot.id=so101_follower \
+  --robot.cameras="{front: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+  --teleop.type=so101_leader \
+  --teleop.port=/dev/tty.usbmodem5B610326051 \
+  --teleop.id=sso101_leader \
+  --dataset.repo_id=TamaraSumarac/so101_policy_robustness_v2_supplement \
+  --dataset.single_task="Pick up the pink block and place it in the plate" \
+  --dataset.num_episodes=16 \
+  --dataset.fps=30 \
+  --dataset.episode_time_s=30 \
+  --dataset.reset_time_s=20 \
+  --dataset.streaming_encoding=true \
+  --dataset.encoder_threads=2 \
+  --dataset.no_stamp=true \
+  --dataset.push_to_hub=false \
+  --display_data=true

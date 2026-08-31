@@ -13,6 +13,7 @@ set -e
 cd "$(dirname "$0")/.."
 
 EXTRA_ARGS=()
+INFERENCE=sync
 case "$1" in
   act)       POLICY=checkpoints_act_baseline/100000/pretrained_model ;;
   diffusion) POLICY=checkpoints_diffusion_baseline/100000_ddim10 ;;   # DDIM-10 variant: see results_diffusion.md
@@ -20,7 +21,11 @@ case "$1" in
              # smolvla_base declares 3 pretraining camera slots; our single
              # camera maps to camera1, same as at training time.
              EXTRA_ARGS+=(--rename_map='{"observation.images.front": "observation.images.camera1"}') ;;
-  *) echo "usage: bash tools/rollout_base.sh {act|diffusion|smolvla}"; exit 1 ;;
+  smolvla_rtc)
+             POLICY=checkpoints_smolvla_baseline/100000/pretrained_model
+             EXTRA_ARGS+=(--rename_map='{"observation.images.front": "observation.images.camera1"}')
+             INFERENCE=rtc ;;
+  *) echo "usage: bash tools/rollout_base.sh {act|diffusion|smolvla|smolvla_rtc}"; exit 1 ;;
 esac
 
 lerobot-rollout \
@@ -30,7 +35,7 @@ lerobot-rollout \
   --robot.cameras="{front: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
   --policy.path=$POLICY \
   --strategy.type=base \
-  --inference.type=sync \
+  --inference.type=$INFERENCE \
   --device=mps \
   --task="Pick up the pink block and place it in the plate" \
   "${EXTRA_ARGS[@]}" \

@@ -11,7 +11,8 @@ import numpy as np
 
 import lerobot.scripts.lerobot_train as lerobot_train
 
-TRIM_PATH = "/home/ubuntu/trim_frames.json"
+# TRIM_PATH = "/home/ubuntu/trim_frames.json"
+TRIM_PATH = "/home/ubuntu/trim_frames_v2.json"
 MARGIN = 15
 
 _OrigSampler = lerobot_train.EpisodeAwareSampler

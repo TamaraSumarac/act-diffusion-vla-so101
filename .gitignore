@@ -12,3 +12,9 @@ checkpoints_act_baseline/
 *.MOV
 checkpoints_diffusion_baseline/
 checkpoints_smolvla_baseline/
+
+# model checkpoints live on the HF Hub, not in git
+checkpoints_*/
+# auto-generated async_inference logs (written to cwd at launch)
+logs/
+**/logs/

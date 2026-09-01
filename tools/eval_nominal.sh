@@ -23,7 +23,11 @@ case "$1" in
     POLICY=checkpoints_smolvla_baseline/100000/pretrained_model
     REPO=TamaraSumarac/rollout_smolvla_nominal_eval
     EXTRA_ARGS+=(--rename_map='{"observation.images.front": "observation.images.camera1"}') ;;
-  *) echo "usage: bash rollout/eval_nominal.sh {diffusion|smolvla}"; exit 1 ;;
+  smolvla_v2_ep66)
+    POLICY=checkpoints_smolvla_v2_66ep/100000
+    REPO=TamaraSumarac/rollout_smolvla_v2_ep66_nominal_eval
+    EXTRA_ARGS+=(--rename_map='{"observation.images.front": "observation.images.camera1"}') ;;
+  *) echo "usage: bash rollout/eval_nominal.sh {diffusion|smolvla|smolvla_v2_ep66}"; exit 1 ;;
 esac
 
 lerobot-rollout \

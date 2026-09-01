@@ -1,4 +1,4 @@
-# Running SmolVLA inference on a cloud GPU (remote policy server)
+# Running SmolVLA inference on a cloud GPU (remote policy server 2026/08/31)
 
 ## Why
 SmolVLA's per-chunk inference on the MacBook (MPS) takes ~1s against a ~1.7s
@@ -111,3 +111,48 @@ Eval config: **0.2**.
   conversion. All three outcomes informative.
 - Box setup for next rental: `pip install grpcio grpcio-tools`, `hf download`
   the checkpoint, scp patched `helpers.py`, tunnel.
+
+
+---
+
+# Part 2 — remote *sync* inference inside `lerobot-rollout` (2026/09/01)
+
+## Decision: recording via a `remote` inference engine (option b)
+The async client was validated and bracketed (Part 1) but records nothing and is async by construction. For the eval I wanted pure sync semantics — request a chunk, block until it arrives, execute all 50 actions, request the next — so the *only* variable vs. the local nominal run is dead time per chunk. Cleanest place for that is the fork's `--inference.type` slot: `lerobot-rollout` keeps the
+episodic strategy, recording, end-episode key and warm-up convention unchanged.
+
+## Fork modifications (`~/lerobot/src/lerobot/rollout/inference/`)
+- `remote.py` (new) — `RemoteSyncInferenceEngine`. Owns a gRPC stub to the upstream `policy_server`; per `get_action` call pops from a local FIFO, and when empty sends the observation (`must_go=True`) and blocks on `GetActions`. Inverts `build_dataset_frame` to rebuild the raw robot obs the server expects (state via `observation.state["names"]`, camera renamed `front → camera1` on the wire). Returned actions are already postprocessed server-side; only reordered to `ordered_action_keys` for parity with `SyncInferenceEngine`. Logs median round trip on stop. The locally loaded policy is unused.
+- `factory.py` — `RemoteInferenceConfig` registered as `"remote"` (`server_address`, `policy_type`, `policy_path_on_server`, `policy_device`, `actions_per_chunk`, `image_rename`, `chunk_timeout_s`) + dispatch.
+- `async_inference/helpers.py` — v2 pass-through resize consolidated in place (previous version had the upstream def and the override coexisting; last definition wins in Python, but it was misleading).
+
+## Repo scripts
+- `tools/rollout_base.sh` — cases `smolvla_remote_local` (server on Mac, plumbing smoke) and `smolvla_remote_box` (server on A10 via tunnel).
+- `tools/eval_nominal.sh` — case `smolvla_remote_box`; `INFERENCE` and `NUM_EPISODES` are now variables (was hardcoded `sync` / `20`); 21 episodes,
+  episode 0 = warm-up.
+- `tools/async_smoke.sh` — still the way to launch the server (`server` subcommand); the `client*` cases are the Part 1 async path, kept as record.
+
+## Validation sequence (all passed first try)
+1. `rollout_base.sh smolvla_remote_local` — chunks flow, arm task-shaped.
+2. Episodic 2-episode recording smoke against the Mac server — dataset written, `lerobot-dataset-viz` plays back.
+3. Box: `rollout_base.sh smolvla_remote_box` — center-0° grab, server log shows observation timesteps 300 → 350 → 400 with `must_go: True` (one request per 50-action drain, no overlap), ~0.23 s server-side per chunk.
+
+## Box setup (fresh rental)
+```bash
+scp training/setup_box.sh ubuntu@<IP>:~/ && ssh ubuntu@<IP> "bash setup_box.sh"
+ssh ubuntu@<IP> "source ~/venv/bin/activate && pip install 'lerobot[smolvla]' grpcio grpcio-tools"
+rsync -avz --progress checkpoints_smolvla_baseline/100000/pretrained_model/ ubuntu@<IP>:~/checkpoints_smolvla_baseline_100k/
+scp ~/lerobot/src/lerobot/async_inference/helpers.py ubuntu@<IP>:~/venv/lib/python3.12/site-packages/lerobot/async_inference/helpers.py
+ssh -L 8080:localhost:8080 ubuntu@<IP>        # keep open; on the box:
+source ~/venv/bin/activate && python -m lerobot.async_inference.policy_server --host localhost --port 8080 --fps 30
+```
+Gotchas: fresh box lacked `transformers` (`lerobot[smolvla]` extra — add to `setup_box.sh`); verify the `helpers.py` patch survived any pip install (`grep -n "v2" .../async_inference/helpers.py`).
+
+## Result (details + table in `smolvla_remote_inference.md`)
+- End-to-end round trip: **median 0.48 s/chunk** over 261 chunks (0.24 s inference + ~0.24 s transport; the raw 640×480 frame is ~920 KB pickled, 9× the Gate 1 payload) vs ~1 s local.
+- Attempts/ep **1.25 → 1.60**, success **35% → 30%** (flat), conversion 0.28 → 0.19.
+- Why the 2.2 prediction was unreachable: chunk cycle = execution + dead time. Local 1.67 + 1.0 = 2.67 s, remote 1.67 + 0.48 = 2.15 s → +24% chunks/s, and attempts rose 18–28%. The lever was right, the throw was bounded by execution time. Latency moves attempts; data coverage moves conversion (v2: 0.37, 55%).
+
+## Open items / next
+- **Diffusion via remote inference.** Server calls `predict_action_chunk`, not `select_action`, so diffusion's `n_obs_steps=2` history queues never fill and it falls into the single-frame offline branch. Needs a small server patch: `populate_queues` before the chunk call, and `policy.reset()` when an observation arrives with timestep 0 (the remote engine restarts timestep on episode reset). Plus `--inference.policy_type=diffusion`, `--inference.image_rename='{}'`. With 8-action chunks the ~0.24 s transport dominates — JPEG on the wire becomes necessary, not optional. GPU also makes more denoising steps affordable (DDIM-10 was a Mac-speed compromise).
+- Shorter executed chunks (`--inference.actions_per_chunk=25`) is *not* a throughput lever (moving fraction 78% → 63%) but is a reactivity/conversion hypothesis: re-observe every 0.83 s and correct the reach. Untested.

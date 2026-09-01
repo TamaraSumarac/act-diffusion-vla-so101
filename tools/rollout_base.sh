@@ -6,6 +6,8 @@
 #   bash tools/rollout_base.sh act
 #   bash tools/rollout_base.sh diffusion
 #   bash tools/rollout_base.sh smolvla
+#   bash tools/rollout_base.sh smolvla_remote_local   # server on Mac: bash tools/async_smoke.sh server
+#   bash tools/rollout_base.sh smolvla_remote_box     # server on A10 via ssh -L 8080:localhost:8080
 #
 # Ritual: leader boxed; camera verified by what it SEES; block placed; hand
 # near power. Task string stays verbatim (SmolVLA consumes it as model input).
@@ -25,7 +27,24 @@ case "$1" in
              POLICY=checkpoints_smolvla_baseline/100000/pretrained_model
              EXTRA_ARGS+=(--rename_map='{"observation.images.front": "observation.images.camera1"}')
              INFERENCE=rtc ;;
-  *) echo "usage: bash tools/rollout_base.sh {act|diffusion|smolvla|smolvla_rtc}"; exit 1 ;;
+  smolvla_remote_local)
+             # Fork's remote sync engine, policy server on the Mac (plumbing smoke
+             # only; ~1s/chunk on MPS). The server loads the checkpoint from the
+             # path we send it, so it must be valid on the server's machine.
+             POLICY=checkpoints_smolvla_baseline/100000/pretrained_model
+             EXTRA_ARGS+=(--rename_map='{"observation.images.front": "observation.images.camera1"}')
+             EXTRA_ARGS+=(--inference.policy_path_on_server="$PWD/$POLICY")
+             EXTRA_ARGS+=(--inference.policy_device=mps)
+             INFERENCE=remote ;;
+  smolvla_remote_box)
+             # Policy server on the A10 box, reached through the SSH tunnel.
+             # Path + device are the BOX's.
+             POLICY=checkpoints_smolvla_baseline/100000/pretrained_model
+             EXTRA_ARGS+=(--rename_map='{"observation.images.front": "observation.images.camera1"}')
+             EXTRA_ARGS+=(--inference.policy_path_on_server=/home/ubuntu/checkpoints_smolvla_baseline_100k)
+             EXTRA_ARGS+=(--inference.policy_device=cuda)
+             INFERENCE=remote ;;
+  *) echo "usage: bash tools/rollout_base.sh {act|diffusion|smolvla|smolvla_rtc|smolvla_remote_local|smolvla_remote_box}"; exit 1 ;;
 esac
 
 lerobot-rollout \

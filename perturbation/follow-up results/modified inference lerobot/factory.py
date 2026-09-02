@@ -81,15 +81,18 @@ class RemoteInferenceConfig(InferenceEngineConfig):
     """Fork addition: sync semantics, inference served by a remote policy_server."""
 
     server_address: str = "localhost:8080"
-    policy_type: str = "smolvla"
+    # CHANGED (2026/09/02): neutral defaults. The original smolvla-flavored
+    # defaults (policy_type="smolvla", chunk=50, front->camera1 rename) caused
+    # two silent misconfigurations when the diffusion case was added: the wrong
+    # policy class loaded on the server, then a KeyError on camera1. Each case
+    # in tools/eval_nominal.sh now states its values explicitly.
+    policy_type: str = ""
     # Checkpoint path valid ON THE SERVER (the client sends it; the server loads it).
     policy_path_on_server: str = ""
     policy_device: str = "cuda"
-    actions_per_chunk: int = 50
+    actions_per_chunk: int = 32
     # Wire-side camera rename; server indexes policy features by incoming key.
-    image_rename: dict[str, str] = field(
-        default_factory=lambda: {"observation.images.front": "observation.images.camera1"}
-    )
+    image_rename: dict[str, str] = field(default_factory=dict)
     chunk_timeout_s: float = 10.0
 
 

@@ -94,3 +94,66 @@ additionally drifted off the demo path).
 
 Artifacts: `results/diffusion_signal/signal_metrics.csv`, `signal_summary.png`,
 `resample_overlay_f58.png`, notebook in `tools/`.
+
+
+## Running inference for diffusion on cloud
+
+**Setup.** Remote inference for Diffusion via the async client/server path (A10 box,
+SSH tunnel), extended for diffusion's 2-frame observation history: the client pairs
+each sent observation with the frame captured 1/30s earlier (a rolling one-tick
+buffer; at episode start the first frame is duplicated, matching sync warm-up), and
+the server stacks [prev, cur] before inference, calling `generate_actions` directly —
+the stock `predict_action_chunk` fabricates a fake single-frame history and cannot
+serve n_obs_steps=2.
+
+**Transport engineering** (each patch forced by a measured failure):
+- Raw paired frames = ~1.8MB per send; the synchronous send blocked the 30Hz control
+  loop 280–400ms per send. Fix 1: JPEG transport (quality 90, ~120KB) — spikes down
+  to 80–180ms, still blocking.
+- Fix 2: a background sender thread with a 1-slot newest-wins handoff queue — control
+  loop settled at 3–7ms uniformly, paired-frame spacing locked at ~0.033s.
+  Both fixes are needed: JPEG keeps the payload inside the chunk budget, the thread
+  keeps serialization off the control loop.
+- A server-path probe (training frame → jpeg round-trip → server prep → policy,
+  compared against the clean offline path and ground truth) agreed to 1.85° max —
+  the pipeline was exonerated at every layer, so remaining behavior was the policy's.
+
+**The clamp/sampler knot.** With the pipeline clean, DDIM-10 reproduced the offline
+seam findings on hardware, from both directions:
+- Unclamped (or clamp 15): travels, violently — the original sensor-breaking regime.
+- Clamp 5: zero net travel at every re-plan cadence tried (threshold 0.8 → 0.0).
+  The clamp is a low-pass filter on the commanded trajectory; DDIM-10's fast,
+  bump-and-return, mode-flipping plans integrate to ~zero through a 5°/tick gate.
+  The arm "wiggles in place" — the policy fighting its own re-plans, amplitude-capped.
+No commitment length fixes this: even full-chunk sync semantics (threshold 0,
+executing all 32 steps from step 0) produced closed loops. The signal itself was the
+problem, exactly as the offline resample overlays showed (collapsed single-mode
+draws that flip between re-plans).
+
+**What worked: DDIM-50.** Same checkpoint, config.json surgery to 50 steps, ~0.43s
+per chunk on the A10 (vs 0.06s DDIM-10, 0.83s DDPM-100). With clamp 10 the arm
+smoothly approached and nearly grasped; a disambiguation run (DDIM-10 back at clamp
+10) confirmed the sampler, not the clamp, was the active ingredient — a looser gate
+admits more signal but cannot make the signal smooth. Clamp bracket: 8 best (moves
+up cleanly, minimal jerk), 5 and 10 slightly rougher. Three repeats at the frozen
+config: **2/3 pickups, 1 near-miss.**
+
+**Scheduler bracket is non-monotonic.** DDPM-100 at 0.83s/chunk ran flawlessly as
+machinery and barely moved the arm (single run, held loosely). Consistent with the
+offline overlays: DDPM-100 has the most inter-draw mode variety — full-commitment
+execution of net-zero bump-and-return draws plus ~1s pauses accumulates nothing.
+DDIM-50 appears to sit at a sweet spot: enough steps to escape DDIM-10's collapsed,
+flip-flopping bundle; few enough that draws stay pruned toward a dominant mode.
+Deployment-optimal sampling ≠ maximum-fidelity sampling.
+
+**Frozen eval config:** DDIM-50 · `max_relative_target=8` · `chunk_size_threshold=0.0`
+(full-chunk sync semantics) · `latest_only` · paired observations · JPEG 90 · remote
+A10. ~0.43s think-pause per 1.07s chunk — same duty class as the SmolVLA remote eval.
+The clamp is part of Diffusion's deployment requirements (ACT and SmolVLA run
+unclamped); that asymmetry is a finding, not a footnote.
+
+**Bottom line.** DDIM-10 was never "the paper's recipe" — it was a compromise forced
+by the Mac's 861ms budget. On mps, 10 steps was the only deployable setting and it
+was violent; clamping it to safety filtered its plans to zero. The GPU retired the
+constraint: 50 steps is deployable at 0.43s/chunk, and the same policy went from
+breaking a sensor to picking up the block.

@@ -26,6 +26,20 @@ case "$1" in
   diffusion)
     POLICY=checkpoints_diffusion_baseline/100000_ddim10   # DDIM-10: see deployment note in results_diffusion.md
     REPO=TamaraSumarac/rollout_diffusion_nominal_eval ;;
+  diffusion_remote_box)
+    # Frozen 2026/09/02 config: DDIM-50 + clamp 8 + full-chunk sync semantics.
+    # See results_diffusion_ctnd.md remote-deployment section. Server must run
+    # the 2026/09/02-patched policy_server.py + helpers.py (2-frame history).
+    POLICY=checkpoints_diffusion_baseline/100000_ddim10   # local POLICY supplies config shape only (device, action names, visual features); behavioral fields aren't read
+    REPO=TamaraSumarac/rollout_diffusion_remote_nominal_eval
+    EXTRA_ARGS+=(--robot.max_relative_target=8)
+    EXTRA_ARGS+=(--inference.policy_path_on_server=/home/ubuntu/checkpoints_diffusion_ddim50_100k)
+    EXTRA_ARGS+=(--inference.policy_device=cuda)
+    EXTRA_ARGS+=(--inference.policy_type=diffusion)
+    EXTRA_ARGS+=(--inference.actions_per_chunk=32)
+    EXTRA_ARGS+=(--inference.image_rename='{}')
+    INFERENCE=remote
+    NUM_EPISODES=21 ;;
   smolvla)
     POLICY=checkpoints_smolvla_baseline/100000/pretrained_model
     REPO=TamaraSumarac/rollout_smolvla_nominal_eval
@@ -41,9 +55,12 @@ case "$1" in
     EXTRA_ARGS+=(--rename_map='{"observation.images.front": "observation.images.camera1"}')
     EXTRA_ARGS+=(--inference.policy_path_on_server=/home/ubuntu/checkpoints_smolvla_baseline_100k)
     EXTRA_ARGS+=(--inference.policy_device=cuda)
+    EXTRA_ARGS+=(--inference.policy_type=smolvla)
+    EXTRA_ARGS+=(--inference.actions_per_chunk=50)
+    EXTRA_ARGS+=(--inference.image_rename='{"observation.images.front": "observation.images.camera1"}')
     INFERENCE=remote
     NUM_EPISODES=21 ;;
-  *) echo "usage: bash tools/eval_nominal.sh {diffusion|smolvla|smolvla_v2_ep66|smolvla_remote_box}"; exit 1 ;;
+  *) echo "usage: bash tools/eval_nominal.sh {diffusion|smolvla|smolvla_v2_ep66|smolvla_remote_box|diffusion_remote_box}"; exit 1 ;;
 esac
 
 lerobot-rollout \

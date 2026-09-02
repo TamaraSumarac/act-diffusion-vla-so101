@@ -230,6 +230,10 @@ class TimedAction(TimedData):
 class TimedObservation(TimedData):
     observation: RawObservation
     must_go: bool = False
+    # ADDED (2026/09/02): frame captured 1/fps before `observation`, paired
+    # client-side for n_obs_steps>1 policies (diffusion). None at episode start
+    # (server duplicates the current frame as warm-up) and for 1-frame policies.
+    prev_observation: RawObservation | None = None
 
     def get_observation(self):
         return self.observation
@@ -324,3 +328,34 @@ def resize_robot_observation_image(image: torch.tensor, resize_dims: tuple[int, 
 #     resized = resize_with_pad(image_batched.float() / 255, dims[0], dims[1], pad_value=0)
 
 #     return resized.squeeze(0)
+
+
+## ADDED LINES (2026/09/02): optional JPEG transport for observation images.
+## Client encodes right before pickling, server decodes right after unpickling.
+## RawObservation images are RGB (H, W, C) uint8 numpy arrays; cv2 works in BGR,
+## so channel order is flipped both ways (lossless permutation, lossy jpeg).
+## Raw 640x480 frame ~920KB -> ~50-100KB at quality 90; pairing doubles frames
+## per send, so this keeps the payload inside the remote chunk budget.
+def encode_jpeg_images(raw_obs: RawObservation, quality: int) -> RawObservation:
+    import cv2
+    import numpy as np
+
+    out = dict(raw_obs)
+    for k, v in raw_obs.items():
+        if isinstance(v, np.ndarray) and v.ndim == 3 and v.dtype == np.uint8:
+            ok, buf = cv2.imencode(".jpg", v[:, :, ::-1], [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)])
+            if ok:
+                out[k] = {"__jpeg__": buf.tobytes()}
+    return out
+
+
+def decode_jpeg_images(raw_obs: RawObservation) -> RawObservation:
+    import cv2
+    import numpy as np
+
+    out = dict(raw_obs)
+    for k, v in raw_obs.items():
+        if isinstance(v, dict) and "__jpeg__" in v:
+            arr = cv2.imdecode(np.frombuffer(v["__jpeg__"], np.uint8), cv2.IMREAD_COLOR)
+            out[k] = np.ascontiguousarray(arr[:, :, ::-1])
+    return out

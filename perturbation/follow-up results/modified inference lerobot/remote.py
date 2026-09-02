@@ -47,6 +47,9 @@ from lerobot.policies.utils import make_robot_action
 from lerobot.transport import services_pb2, services_pb2_grpc  # type: ignore
 from lerobot.transport.utils import grpc_channel_options, send_bytes_in_chunks
 
+# ADDED 2026/09/02
+from lerobot.async_inference.helpers import RemotePolicyConfig, TimedObservation, encode_jpeg_images 
+
 from .base import InferenceEngine
 
 logger = logging.getLogger(__name__)
@@ -75,6 +78,11 @@ class RemoteSyncInferenceEngine(InferenceEngine):
     ) -> None:
         if not policy_path_on_server:
             raise ValueError("remote inference needs --inference.policy_path_on_server (path valid ON THE SERVER)")
+        # ADDED (2026/09/02): was defaulted to "smolvla" in RemoteInferenceConfig,
+        # which silently loaded the wrong policy class on the server.
+        if not policy_type:
+            raise ValueError("remote inference needs --inference.policy_type (e.g. diffusion, smolvla)")
+        self._server_address = server_address
         self._server_address = server_address
         self._policy_type = policy_type
         self._policy_path = policy_path_on_server
@@ -103,6 +111,15 @@ class RemoteSyncInferenceEngine(InferenceEngine):
         self._timestep = 0
         self._chunk_count = 0
         self._latency_log: list[float] = []
+
+        # ADDED (2026/09/02): n_obs_steps>1 support (diffusion). get_action is
+        # called every rollout tick, so a one-slot rolling buffer of the previous
+        # tick's raw obs gives a true 1/30s-spaced history pair. JPEG transport
+        # rides along (paired raw frames doubled the payload; measured on the
+        # async client). Derived from policy_type: smolvla/act paths unchanged.
+        self._pair_observations = policy_type == "diffusion"
+        self._jpeg_quality = 90 if self._pair_observations else 0
+        self._prev_raw: dict | None = None
 
         logger.info(
             "RemoteSyncInferenceEngine initialized (server=%s, policy=%s@%s on %s, chunk=%d)",
@@ -141,11 +158,13 @@ class RemoteSyncInferenceEngine(InferenceEngine):
                 self._chunk_count, med,
             )
 
+    # MODIFIED 2026/09/02
     def reset(self) -> None:
         """Episode boundary: drop any unexecuted actions, restart timestep."""
         logger.info("Resetting remote inference state (fifo=%d dropped)", len(self._fifo))
         self._fifo.clear()
         self._timestep = 0
+        self._prev_raw = None  # ADDED (2026/09/02): pairing warm-up per episode
 
     # ---- action production -------------------------------------------
 
@@ -154,6 +173,10 @@ class RemoteSyncInferenceEngine(InferenceEngine):
             return None
         if not self._fifo:
             self._request_chunk(obs_frame)
+        # ADDED (2026/09/02): updated after the request check so a request sees
+        # the PREVIOUS tick's frame in the buffer, not the current one.
+        if self._pair_observations:
+            self._prev_raw = self._to_raw_observation(obs_frame)
         if not self._fifo:  # server returned nothing usable
             return None
         self._timestep += 1
@@ -177,11 +200,26 @@ class RemoteSyncInferenceEngine(InferenceEngine):
         return raw
 
     def _request_chunk(self, obs_frame: dict) -> None:
+        # ADDED (2026/09/02): n_obs_steps>1 support (diffusion) + JPEG transport.
+        # prev = the previous tick's frame from the rolling buffer (updated in
+        # get_action AFTER the request check, so it holds t-1 here). None at
+        # episode start -> server duplicates the current frame (warm-up,
+        # matching training reset semantics). Encoding happens on copies; the
+        # buffer keeps raw frames.
+        raw = self._to_raw_observation(obs_frame)
+        prev = self._prev_raw
+        if self._jpeg_quality > 0:
+            raw = encode_jpeg_images(raw, self._jpeg_quality)
+            if prev is not None:
+                prev = encode_jpeg_images(prev, self._jpeg_quality)
+
         obs = TimedObservation(
             timestamp=time.time(),
-            observation=self._to_raw_observation(obs_frame),
+            observation=raw,
             timestep=self._timestep,
         )
+        if self._pair_observations:
+            obs.prev_observation = prev
         obs.must_go = True  # sync: every request is a fresh plan, never skipped
 
         t0 = time.perf_counter()

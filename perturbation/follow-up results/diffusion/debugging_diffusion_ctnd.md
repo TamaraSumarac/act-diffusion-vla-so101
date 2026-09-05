@@ -1,159 +1,64 @@
 ## Debugging diffusion violent motion that damaged the robot (offline action signal analysis)
 
-**Motivation.** The DDIM-10 hardware run was violent enough to detach a sensor. Before
-the arm moves on this policy again, the question "where does the violence come from?"
-was answered on the desk: run the checkpoint offline on recorded observations and
-measure the action waveform, rather than discovering it on hardware. Three candidate
-mechanisms, separable by measurement: (a) intra-chunk noise (coarse DDIM sampling →
-trembling plans), (b) chunk-boundary seams (consecutive re-plans disagree), (c)
-sync stop-go timing (not measurable from action values; the residual if (a) and (b)
-come back clean).
+First Diffusion attempt was a few weeks back. First line of issue we faced was inference time: ~9 s per chunk on my M1 Mac. Following the paper's own recipe ([Chi et al., 2023](https://arxiv.org/abs/2303.04137), §3.4), I cut the denoising steps at inference from the 100 used in training to 10 — DDIM lets you take larger denoising jumps with the same trained model. That brought inference to ~0.9 s, but on the arm the policy acted violently enough to physically damage it (gripper motor fell out). Full results in [results_diffusion.md](diffusion/results_diffusion.md). This writeup characterizes this violence and resolves it.
 
-**Method.** Notebook (`tools/diffusion_signal_analysis.ipynb`): 30 frames sampled
-mid-episode from the frozen training dataset. For each frame t, the policy predicts its
-full action chunk from exactly the observations it would have seen live (2-frame history
-for Diffusion, built via `delta_timestamps` to mirror training collation). Metrics, all
-in degrees:
+![Broken arm](broken_arm.jpg)
 
-- *Intra-chunk*: per-step deltas within one predicted chunk (does the plan tremble?).
-- *Seam*: predict again from frame t+n (n_exec ∈ {8, 16}) and measure
-  |chunk_B[0] − chunk_A[n−1]| — the commanded jump at a re-plan boundary.
-- *Resample spread*: same frame sampled K=6 times; std across draws isolates the
-  contribution of sampling stochasticity alone.
+**Motivation.** The DDIM-10 hardware run was violent enough to detach the gripper motor. Before running this policy on the arm again, I wanted to answer "where does the violence come from?" offline by runing the checkpoint on recorded observations and measuring the action waveform, instead of finding out on hardware. Three candidate mechanisms to test: 
+(a) Intra-chunk noise — coarse DDIM sampling makes the actions jump around from step to step within a single chunk
+(b) Chunk-boundary seams — consecutive re plans disagree about where to go
+(c) Sync stop-go timing — the arm moves ~1 s, freezes ~1 s while the next chunk computes, then snaps back into motion; each restart is a torque impulse, and hundreds per session can work screws and connectors loose. I wouldn't be able to get a confirmation that this is happening from data, but it is hypothesis if first two don't give us answers. 
 
-Schedulers compared on identical frames (same seed → same frame set): DDPM-100
-(as trained), DDIM-50, DDIM-10 (the deployed variant), plus ACT as deterministic
-reference and dataset ground-truth deltas as the smoothness floor. Scheduler variants
-by checkpoint `config.json` surgery with symlinked weights (the only override path
-that works; see the DDIM-10 note above). The variant-existence guard now verifies
-scheduler/steps content, after a stale symlink was caught silently aliasing "ddim50"
-to the original checkpoint.
+**Method.** Notebook (`tools/diffusion_signal_analysis.ipynb`): 45 frames sampled mid-episode from the frozen training dataset. For each frame t, the policy predicts its full action chunk from exactly the observations it would have seen live (2-frame history for Diffusion, built via `delta_timestamps` to match the training time input format). From these we extracted:
 
-Caveat: teacher-forced. Frame t+n comes from the demo trajectory, not from executing
-chunk A, so seam numbers are a lower bound on live seams (live, the arm has
-additionally drifted off the demo path).
+- *Intra-chunk*: how much consecutive actions differ within a single predicted chunk 
+- *Seam*: predict a chunk at frame t (chunk A), then predict a fresh chunk at t+n (chunk B, n_exec ∈ {8, 16, 32}) and measure the jump between where A left off and where B begins. This will tell us the consequtive chunk discontinuity commanded at every re-plan. Note - t+n observation comes from the demo trajectory (teacher-forced), i.e. this is a state a perfect executor would be in. In reality, arm has drifted off that trajectory during execution, so these seam numbers are a lower bound on the real ones.
+- *Resample spread*: predict from the same frame 6 times and take the std across draws — since each call starts from fresh noise, this measures how much of any difference is just sampling randomness (the noise floor for the other two metrics).
+
+All schedulers were compared on the same 45 frames (same seed): DDPM-100 (as trained), DDIM-50, DDIM-10 (the variant that ran on hardware). Two references alongside them: ACT, which is deterministic, and the per-step deltas of the demo data itself — the demos set the baseline for how smooth motion can be, so a scheduler matching them is as clean as it gets. Each scheduler variant is a copy of the checkpoint with only `config.json` edited, all sharing the same weights (the only override path that works — see the DDIM-10 note above). Before each run, a guard verifies the actually-loaded scheduler and step count, so every row in the table is what it claims to be.
+
 
 **Pipeline notes** (recorded because each cost a debugging round):
-- Normalization lives in the checkpoint's pre/post processor pipelines
-  (`make_pre_post_processors`), not in the policy. Calling `predict_action_chunk` on
-  raw dataset tensors silently produces normalized-space garbage — first-pass numbers
-  were invalid until predictions were verified against ground truth in degrees on a
-  training frame.
-- Diffusion's `predict_action_chunk` unsqueezes a fake single-frame history
-  (n_obs_steps=1) — the same design that leaves the async server's obs queues unfilled.
-  Correctly stacked history must bypass it and call `diffusion.generate_actions`
-  directly, adding the batch dim manually (the preprocessor's ndim check mistakes
-  history-stacked state for an already-batched input).
+- All the metrics in this writeup compare policies in degrees, but the policy networks don't operate in degrees — they take normalized inputs and produce normalized outputs, and the conversion in both directions lives in separate processor objects (`make_pre_post_processors`), not inside the policy. Hence, calling `predict_action_chunk` on raw dataset tensors returns something that is not usable for this analysis. So the notebook applies processors around every prediction, verified by checking that predictions on a training frame match the demo's ground truth in degrees.
+- Diffusion's `predict_action_chunk` produces real Diffusion output, but its input handling assumes a single observation: it takes one frame and internally fabricates the 2-frame history the model expects. Hand it a correctly built (t−1, t) history and it breaks the shape instead of using it. So the notebook calls `diffusion.generate_actions` (layer below the wrapper) with properly stacked history, adding the batch dimension by hand (the preprocessor sees the extra history dimension and mistakes the input for an already-batched one).
 
-**Results** (30 seam pairs, degrees; dataset floor: p95 = 1.85, max = 5.98 per step):
+**Results** (45 seam pairs, degrees; dataset floor: p95 = 1.85, max = 5.98 per step):
 
-| policy | intra d_p95 | seam n8 (mean) | seam n16 (mean) | worst seam | resample spread |
-|---|---|---|---|---|---|
-| ACT | 1.76 | 2.12 | 3.55 | 10.9 | — (deterministic) |
-| DDIM-10 | 1.43 | 3.13 | 6.75 | **38.0** | 1.32 |
-| DDIM-50 | 1.52 | 3.07 | 3.66 | 21.5 | 1.28 |
-| DDPM-100 | 1.47 | 2.93 | 4.31 | 18.5 | 1.08 |
+| policy   | intra d_p95 | seam n8 (mean) | seam n16 (mean) | seam n32 (mean) | worst seam | resample spread   |
+|----------|------------:|---------------:|----------------:|----------------:|-----------:|-------------------|
+| ACT      |        1.86 |           2.23 |            3.02 |            7.97 |       65.0 | — (deterministic) |
+| DDIM-10  |        1.55 |           2.64 |            4.02 |            7.81 |       63.9 |              1.15 |
+| DDIM-50  |        1.59 |           3.76 |            3.78 |           10.93 |       84.3 |              1.24 |
+| DDPM-100 |        1.64 |           3.27 |            3.27 |            9.72 |       87.3 |              0.91 |
 
 **Findings.**
-1. **Intra-chunk noise is exonerated.** Every scheduler's per-step deltas sit at or
-   below the dataset floor. The plans do not tremble; hypothesis (a) is dead.
-2. **The violence is a seam-tail phenomenon.** Mean seams are benign; the damage lives
-   in rare spikes (18–38°, 4–8× the 5° clamp) concentrated at two specific frames —
-   visually near-grasp moments where the demo waits and the policy is multimodal about
-   *when* to move. Mechanism: at n_exec=16 the executing chunk's open-loop tail has
-   drifted far from where a fresh re-plan begins.
-3. **More denoising does not fix it.** The spikes persist at the same frames through
-   DDIM-50 and DDPM-100 (38 → 21 → 18°), and ACT shares the same hot frames at lower
-   magnitude (10.9°). The spikes are a property of the learned model's open-loop drift
-   at ambiguous moments, not a DDIM-10 sampling artifact. The "GPU + more steps fixes
-   everything" story is dead; the GPU fixes *timing*, not seams.
-4. **Executed-horizon length is the lever.** Worst seams at n_exec=8 are 6–9° across
-   all schedulers vs 18–38° at n_exec=16. Drift compounds with horizon; re-plan often
-   and the seam never grows teeth. (The deployed sync config executed 32 — deeper into
-   bad territory than anything measured here.)
-5. **Resample overlays** (5 draws, hot frame): DDPM-100/DDIM-50 produce diverse bump
-   timings — the multimodality diffusion was chosen for. DDIM-10's draws collapse to a
-   tight bundle (known few-step-DDIM cost) yet it has the *worst* seams: low variance
-   around a drifting trajectory beats high variance for nothing. All fifteen draws
-   across all schedulers also share the same bias (bump ~30 steps before the demo does)
-   — model-level, echoing finding 3.
+1. **Intra-chunk noise is not the problem.** Every scheduler's per-step deltas are at or below the demo data's own — the sampling adds no jitter of its own.
+2. **The violence lives in rare seam spikes.** Mean seams look harmless (3–11° across the table), but the damage comes from occasional large jumps concentrated at a few specific frames — up to 12–20° at n_exec=16 and 60–90° at n_exec=32. These are moments where the demo pauses or is about to move — the policy has several valid options for *when* to move, and two consecutive re-plans can pick different ones.
+3. **More denoising does not fix it.** The spikes sit at the same frames across DDIM-10, DDIM-50 and DDPM-100 — and ACT shares the same hot frames at comparable magnitude. This is the trained model being uncertain at ambiguous moments, not a DDIM-10 sampling artifact — so a faster GPU with more denoising steps was never going to solve it.
+4. **Seams grow with commitment length.** Mean seams: ~2–4° at n_exec=8, ~3–4° at 16, ~8–11° at 32 — for every policy, ACT included. This is expected: errors compound the longer the chunk runs open-loop, so the further past its observation a plan executes, the further its tail lands from where a fresh re-plan begins. One caveat on the worst n=32 seams: they are dominated by a frame where *all* policies predict a dive the reference demo doesn't make at that moment — a timing-ambiguous state, so the teacher-forced seam there partly measures disagreement with one demo's timing rather than a jump a live arm would be commanded through.
+5. **Why do consecutive re-plans disagree?** 15 draws per scheduler from one identical observation: every draw does the same bump, but at a different time — some move immediately, some hold for 10–20 steps first. Two consecutive chunks are two such draws, and when they pick different timings, the handoff between them is the seam. The spread looks the same across all three schedulers — matching finding 3: this is the model, not the sampler (see image below).
 
-**Deployment consequences.**
-- `max_relative_target=5` is load-bearing permanently, not a first-run precaution:
-  worst observed commanded jump is 38°, and the spike mechanism is model-level. The
-  clamp converts it into a 5°/tick slew. (Demo motion itself occasionally exceeds
-  5°/step — p-max 5.98 — so the clamp mildly slows even perfect imitation; acceptable.)
-- Target configuration: **remote GPU inference + effective n_exec ≈ 8 + clamp**. Async
-  re-plan cadence at A10 chunk times (~0.1s expected for the 263M U-Net) naturally
-  lands in the small-n_exec regime, so the timing fix and the seam fix are the same
-  fix. A sync clamped run at n_exec=8 on mps would reintroduce the ~0.9s-freeze lurch
-  and is skipped.
-- Prerequisite: the async server cannot serve Diffusion as-is — `predict_action_chunk`
-  fabricates a single-frame history, so the server needs a 2-frame obs buffer
-  (the same fix the notebook applies manually).
+![Resampling the hot frame](results/diffusion_signal/resample_overlay_f58.png)
 
-Artifacts: `results/diffusion_signal/signal_metrics.csv`, `signal_summary.png`,
-`resample_overlay_f58.png`, notebook in `tools/`.
+**Plan for deployment.**
+- **Clamp the motion.** The spikes come from the model itself, so no scheduler or GPU change removes them — and the worst commanded jumps are far above any reasonable per-step motion. Let's start with `max_relative_target=5`, so a large one-step request becomes at most 5° per tick.
+- **Target config: remote GPU + clamp, starting at n_exec = 32.** Keep n_exec = 32 at first — with horizon 64 that's the paper's own predict/execute ratio of 2 — and use `chunk_size_threshold` to request re-plans earlier within it, checking whether seams shrink on hardware. If they do, drop n_exec further (16, then 8): the offline table says shorter commitments mean smaller seams. The constraint is duty cycle: executing 8 steps takes 0.27 s, and on the M1 inference takes ~0.9 s (DDIM-10) — the arm would wait ~3× longer than it moves. So, as with SmolVLA, move inference to the remote A10 (~0.1 s per chunk + box round-trip) to keep the "doing" vs "waiting" ratio workable at short commitments.
 
+All data and analysis: metrics in [`results/diffusion_signal/signal_metrics.csv`](results/diffusion_signal/signal_metrics.csv), figures in [`signal_summary.png`](results/diffusion_signal/signal_summary.png) and [`resample_overlay_f58.png`](results/diffusion_signal/resample_overlay_f58.png), notebook in [`Diffusion_Signal_Analysis.ipynb`](Diffusion_Signal_Analysis.ipynb).
 
 ## Running inference for diffusion on cloud
 
-**Setup.** Remote inference for Diffusion via the async client/server path (A10 box,
-SSH tunnel), extended for diffusion's 2-frame observation history: the client pairs
-each sent observation with the frame captured 1/30s earlier (a rolling one-tick
-buffer; at episode start the first frame is duplicated, matching sync warm-up), and
-the server stacks [prev, cur] before inference, calling `generate_actions` directly —
-the stock `predict_action_chunk` fabricates a fake single-frame history and cannot
-serve n_obs_steps=2.
+**Setup.** Remote inference for Diffusion via the async client/server path (A10 box, SSH tunnel), extended for diffusion's 2-frame observation history: the client pairs each sent observation with the frame captured 1/30s earlier (a rolling one-tick buffer; at episode start the first frame is duplicated, matching sync warm-up), and the server stacks [prev, cur] before inference, calling `generate_actions` directly — the stock `predict_action_chunk` fabricates a fake single-frame history and cannot serve n_obs_steps=2.
 
-**Transport engineering** (each patch forced by a measured failure):
-- Raw paired frames = ~1.8MB per send; the synchronous send blocked the 30Hz control
-  loop 280–400ms per send. Fix 1: JPEG transport (quality 90, ~120KB) — spikes down
-  to 80–180ms, still blocking.
-- Fix 2: a background sender thread with a 1-slot newest-wins handoff queue — control
-  loop settled at 3–7ms uniformly, paired-frame spacing locked at ~0.033s.
-  Both fixes are needed: JPEG keeps the payload inside the chunk budget, the thread
-  keeps serialization off the control loop.
-- A server-path probe (training frame → jpeg round-trip → server prep → policy,
-  compared against the clean offline path and ground truth) agreed to 1.85° max —
-  the pipeline was exonerated at every layer, so remaining behavior was the policy's.
+**Mac ↔ GPU data path** (each patch forced by a measured failure):
+- Sending raw paired frames to the GPU box is ~1.8 MB per send, and since sending was synchronous, the 30 Hz control loop froze 280–400 ms every send. Fix 1: compress to JPEG (quality 90, ~120 KB) — freezes down to 80–180 ms, but still there.
+- Fix 2: move sending to a background thread with a 1-slot queue where the newest frame overwrites the old one (the arm should always act on the freshest image, not work through a backlog). Control loop settled at 3–7 ms, frame spacing locked at ~0.033 s. Both fixes are needed: JPEG makes the payload small enough, the thread gets sending off the control loop entirely.
+- To confirm this surgery wasn't distorting anything, I ran a training frame through the full path — JPEG round-trip, server prep, policy — and compared against the clean offline prediction and ground truth: agreement to 1.85° max.
 
-**The clamp/sampler knot.** With the pipeline clean, DDIM-10 reproduced the offline
-seam findings on hardware, from both directions:
-- Unclamped (or clamp 15): travels, violently — the original sensor-breaking regime.
-- Clamp 5: zero net travel at every re-plan cadence tried (threshold 0.8 → 0.0).
-  The clamp is a low-pass filter on the commanded trajectory; DDIM-10's fast,
-  bump-and-return, mode-flipping plans integrate to ~zero through a 5°/tick gate.
-  The arm "wiggles in place" — the policy fighting its own re-plans, amplitude-capped.
-No commitment length fixes this: even full-chunk sync semantics (threshold 0,
-executing all 32 steps from step 0) produced closed loops. The signal itself was the
-problem, exactly as the offline resample overlays showed (collapsed single-mode
-draws that flip between re-plans).
+**Adjusting inference parameters on the real arm.** 
+- **Clamp (DDIM-10):** at clamp = 15 arm travels violently — this is regime that broke it. At 5 it never even gets up, the arm wiggles in place. So ideal clamping is somewhere in the middle, but the motion never looked smooth, so we ditched DDIM-10 and tried to go for higher sampler.
+- **Effective horizon tuning (DDIM-10):** offline analysis said shorter commitments mean smaller seams, so I kept n_exec = 32 (for horizon = 64, 2x smaller like paper) but swept `chunk_size_threshold` from 0.8 (request a new chunk after ~6 executed steps) down to 0.0 (execute all 32). Note: an early request is not an early swap — with ~0.5 s of inference + round-trip, the arm executes another ~13–15 steps before the new chunk lands. So even the most aggressive threshold commits ~20 steps; the short regime from the offline analysis was unreachable in sync. Threshold 0 actually looked better than 0.8, and in hindsight it makes sense: at 0.8 each new chunk is planned from a ~0.5 s-old mid-motion observation, at 0 the arm is standing still when it's planned. Since latency blocks short commitments either way, full chunk was the right sync choice — short commitments with fresh observations is exactly what async gives.
+- **Sampler:** DDIM-50 (same checkpoint, config.json edit, ~0.43 s/chunk on the A10) is where motion got smooth — approach and near-grasp at clamp 10. To make sure the improvement was the sampler and not the clamp, I reran DDIM-10 at clamp 10: still rough. Clamp bracket around DDIM-50: 8 the cleanest, 5 and 10 slightly rougher. Arm was able to pickup box from the center of the starting region 2/3 attemps. 
+- **DDPM-100** (~0.83 s/chunk) ran fine as machinery but barely moved the arm — most inter-draw variety, so full chunks of bump-and-return draws plus ~1 s pauses add up to nothing. Best sampling fidelity ≠ best deployment.
 
-**What worked: DDIM-50.** Same checkpoint, config.json surgery to 50 steps, ~0.43s
-per chunk on the A10 (vs 0.06s DDIM-10, 0.83s DDPM-100). With clamp 10 the arm
-smoothly approached and nearly grasped; a disambiguation run (DDIM-10 back at clamp
-10) confirmed the sampler, not the clamp, was the active ingredient — a looser gate
-admits more signal but cannot make the signal smooth. Clamp bracket: 8 best (moves
-up cleanly, minimal jerk), 5 and 10 slightly rougher. Three repeats at the frozen
-config: **2/3 pickups, 1 near-miss.**
-
-**Scheduler bracket is non-monotonic.** DDPM-100 at 0.83s/chunk ran flawlessly as
-machinery and barely moved the arm (single run, held loosely). Consistent with the
-offline overlays: DDPM-100 has the most inter-draw mode variety — full-commitment
-execution of net-zero bump-and-return draws plus ~1s pauses accumulates nothing.
-DDIM-50 appears to sit at a sweet spot: enough steps to escape DDIM-10's collapsed,
-flip-flopping bundle; few enough that draws stay pruned toward a dominant mode.
-Deployment-optimal sampling ≠ maximum-fidelity sampling.
-
-**Frozen eval config:** DDIM-50 · `max_relative_target=8` · `chunk_size_threshold=0.0`
-(full-chunk sync semantics) · `latest_only` · paired observations · JPEG 90 · remote
-A10. ~0.43s think-pause per 1.07s chunk — same duty class as the SmolVLA remote eval.
-The clamp is part of Diffusion's deployment requirements (ACT and SmolVLA run
-unclamped); that asymmetry is a finding, not a footnote.
-
-**Bottom line.** DDIM-10 was never "the paper's recipe" — it was a compromise forced
-by the Mac's 861ms budget. On mps, 10 steps was the only deployable setting and it
-was violent; clamping it to safety filtered its plans to zero. The GPU retired the
-constraint: 50 steps is deployable at 0.43s/chunk, and the same policy went from
-breaking a sensor to picking up the block.
+**Frozen eval config:** DDIM-50 · `max_relative_target=8` · `chunk_size_threshold=0.0` (full-chunk sync semantics) · `latest_only` · paired observations · JPEG 90 · remote A10. ~0.43s think-pause per 1.07s chunk — same duty class as the SmolVLA remote eval. The clamp is part of Diffusion's deployment requirements (ACT and SmolVLA run unclamped)

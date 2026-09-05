@@ -9,7 +9,7 @@
 
 ![Robustness heatmap success results](robustness_heatmap.png)
 
-## Results of failure analysis:
+## Results of failure analysis:ok let's
 If we look at failure modes in aggregate across ACT and SmolVLA, we see three clear behaviors:
 
 * **Shared failure modes:** Both policies consistently make the same three mistakes: `sought_demo_middle`, `tipped_block`, and `pushed_block`. I believe all three are consistent with limitations in training data representation. Tips and pushes often happen when arm is close to object but not exactly there on first try, it accidentally creates contact with the object and moves it toward a more familiar position, while `sought_demo_middle` is an even clearer consequence of the training distribution.
@@ -28,7 +28,7 @@ Success modes by policy reveal a striking difference. Comparing ACT and SmolVLA 
 
 ![Success modes by policy](success_modes_by_policy.png)
 
-One question I have is whether this could be a consequence of SmolVLA's longer inference time. With inference ~3× slower than ACT (~1 s vs. ~351 ms), SmolVLA looks like it is effectively getting fewer pickup attempts within the same episode duration, which could potentially be reducing its overall success rate. Note this is a different claim from the slide result — there latency didn't change what SmolVLA did (it still re-targeted), here the question is whether latency is affecting "how much policy does" (i.e. how many attempts it gets). 
+One question I have is whether this could be a consequence of SmolVLA's slower cycle: with ~1 s inference on top of its 50-step chunk, SmolVLA completes a full plan-and-execute cycle somewhat slower than ACT (which executes its whole 100-step chunk between re-plans), and looks like it is getting fewer pickup attempts within the same episode duration, which could potentially be reducing its overall success rate. Note this is a different claim from the slide result — there latency didn't change what SmolVLA did (it still re-targeted), here the question is whether latency is affecting "how much policy does" (i.e. how many attempts it gets). 
 
 ![Attempts per episode](attempts_per_episode.png)
 
@@ -57,3 +57,6 @@ Hypothesis was that SmolVLA would adjust to a new object better than ACT, given 
 
 ### Cube slide
 Hypothesis was that ACT would operate more on "autopilot," going toward the middle of the demo region, while SmolVLA would be better at adjusting to the new position given its expected better "understanding" of the visual world. This is what we observed. One question we had before the measurement was whether inference latency could affect performance, but ACT replans ~3× faster (~351 ms vs ~1 s) and still did not adjust to shifted object, suggesting that representation, rather than reaction time, is the more important constraint. Note that success rates in this column are inflated for both policies, as slides moved the block toward more middle of the starting region territory (mostly seen in training).
+
+
+

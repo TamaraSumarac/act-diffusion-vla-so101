@@ -18,3 +18,4 @@ checkpoints_*/
 # auto-generated async_inference logs (written to cwd at launch)
 logs/
 **/logs/
+diffusion/presentation/*.mp4

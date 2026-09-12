@@ -66,9 +66,31 @@ def main(ckpt_path):
 
     batch = preprocessor(batch)
 
+    if "--graph" in sys.argv:
+        from torchview import draw_graph
+        model = policy.model
+        b = dict(batch)
+        if cfg.type == "act":
+            b["observation.images"] = [b[k] for k in policy.config.image_features]
+            model.train()          # dataset frame has "action" -> VAE branch is drawn too
+        g = draw_graph(model, input_data={"batch": b}, depth=1,
+                        expand_nested=True, save_graph=True,
+                        filename=f"{cfg.type}_graph", directory=".")
+        model.eval()
+        print("graph saved ->", f"{cfg.type}_graph.png")
+        # return
+
+    # with torch.no_grad(): #
+    #     t0 = time.perf_counter()
+    #     chunk = policy.predict_action_chunk(batch)
+    #     t1 = time.perf_counter()
+
     with torch.no_grad():
+        policy.predict_action_chunk(batch)          # warm-up, discard
+        if device.type == "mps": torch.mps.synchronize()
         t0 = time.perf_counter()
         chunk = policy.predict_action_chunk(batch)
+        if device.type == "mps": torch.mps.synchronize()
         t1 = time.perf_counter()
 
     action = postprocessor(chunk[:, 0])
